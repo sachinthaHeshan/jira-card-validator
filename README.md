@@ -26,13 +26,13 @@ jira-card-validator configure
 
 You'll be prompted for:
 
-| Field            | Description                           |
-| ---------------- | ------------------------------------- |
-| Jira Base URL    | e.g. `https://collectiveos.atlassian.net` |
-| Jira Email       | Your Atlassian account email          |
-| Jira API Token   | [Create one here](https://id.atlassian.com/manage-profile/security/api-tokens) |
-| GitHub Token     | [Create one here](https://github.com/settings/tokens) with `repo` scope |
-| Repos            | Comma-separated list of GitHub repos to scan (defaults provided) |
+| Field          | Description                                                                    |
+| -------------- | ------------------------------------------------------------------------------ |
+| Jira Base URL  | e.g. `https://collectiveos.atlassian.net`                                      |
+| Jira Email     | Your Atlassian account email                                                   |
+| Jira API Token | [Create one here](https://id.atlassian.com/manage-profile/security/api-tokens) |
+| GitHub Token   | [Create one here](https://github.com/settings/tokens) with `repo` scope        |
+| Repos          | Comma-separated list of GitHub repos to scan (defaults provided)               |
 
 Credentials are saved to `~/.jira-card-validator/config.json` (file permissions set to owner-only).
 
@@ -60,12 +60,12 @@ jira-card-validator help
 
 ## Options
 
-| Flag           | Description                                      |
-| -------------- | ------------------------------------------------ |
-| `-a`, `--all`  | Show cards for all users, not just yours          |
-| `-u`, `--update` | Auto-transition fully-merged cards to IR-DA     |
-| `--debug`      | Print detailed debug output                      |
-| `-h`, `--help` | Show help                                        |
+| Flag             | Description                                 |
+| ---------------- | ------------------------------------------- |
+| `-a`, `--all`    | Show cards for all users, not just yours    |
+| `-u`, `--update` | Auto-transition fully-merged cards to IR-DA |
+| `--debug`        | Print detailed debug output                 |
+| `-h`, `--help`   | Show help                                   |
 
 ## How It Works
 
@@ -87,3 +87,5 @@ jira-card-validator help
 npm uninstall -g jira-card-validator
 rm -rf ~/.jira-card-validator
 ```
+
+---
