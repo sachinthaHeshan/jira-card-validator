@@ -4,16 +4,17 @@
   "description": "CLI tool to validate Jira card statuses against GitHub PR states and auto-transition merged cards",
   "type": "module",
   "bin": {
-    "jira-card-validator": "./bin/cli.js"
+    "jira-card-validator": "./dist/bin/cli.js"
   },
   "files": [
-    "bin/",
-    "lib/",
+    "dist/",
     "README.md"
   ],
   "scripts": {
-    "start": "node bin/cli.js",
-    "configure": "node bin/cli.js configure"
+    "build": "tsc",
+    "start": "node dist/validateCardStatus.js",
+    "dev": "tsx validateCardStatus.ts",
+    "configure": "tsx bin/cli.ts configure"
   },
   "keywords": [
     "jira",
@@ -31,6 +32,12 @@
   },
   "packageManager": "pnpm@10.5.2",
   "dependencies": {
+    "dotenv": "^16.4.7",
     "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   }
 }

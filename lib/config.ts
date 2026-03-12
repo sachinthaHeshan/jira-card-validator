@@ -3,10 +3,18 @@ import path from "path";
 import os from "os";
 import readline from "readline";
 
+export interface AppConfig {
+  jiraBaseUrl: string;
+  jiraEmail: string;
+  jiraApiToken: string;
+  githubToken: string;
+  repos: string[];
+}
+
 const CONFIG_DIR = path.join(os.homedir(), ".jira-card-validator");
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 
-const DEFAULT_REPOS = [
+const DEFAULT_REPOS: string[] = [
   "ChameleonCollective/CollectiveOSMultiTenant",
   "ChameleonCollective/CollectiveOSMultiTenantExpressBE",
   "ChameleonCollective/MultitenantSignUpService",
@@ -15,37 +23,37 @@ const DEFAULT_REPOS = [
   "ChameleonCollective/CollectiveOSMultiTenantSST",
 ];
 
-function ensureConfigDir() {
+function ensureConfigDir(): void {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
   }
 }
 
-export function loadConfig() {
+export function loadConfig(): AppConfig | null {
   ensureConfigDir();
   if (!fs.existsSync(CONFIG_FILE)) {
     return null;
   }
   try {
     const raw = fs.readFileSync(CONFIG_FILE, "utf-8");
-    return JSON.parse(raw);
+    return JSON.parse(raw) as AppConfig;
   } catch {
     return null;
   }
 }
 
-export function saveConfig(config) {
+export function saveConfig(config: AppConfig): void {
   ensureConfigDir();
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
   fs.chmodSync(CONFIG_FILE, 0o600);
 }
 
-export function getRepos(config) {
+export function getRepos(config: AppConfig | null): string[] {
   return config?.repos?.length ? config.repos : DEFAULT_REPOS;
 }
 
-export function validateConfig(config) {
-  const missing = [];
+export function validateConfig(config: AppConfig | null): { valid: boolean; missing: string[] } {
+  const missing: string[] = [];
   if (!config) return { valid: false, missing: ["all — run: jira-card-validator configure"] };
   if (!config.jiraBaseUrl) missing.push("JIRA_BASE_URL");
   if (!config.jiraEmail) missing.push("JIRA_EMAIL");
@@ -54,7 +62,7 @@ export function validateConfig(config) {
   return { valid: missing.length === 0, missing };
 }
 
-function prompt(rl, question, defaultValue = "") {
+function prompt(rl: readline.Interface, question: string, defaultValue = ""): Promise<string> {
   const suffix = defaultValue ? ` (${defaultValue})` : "";
   return new Promise((resolve) => {
     rl.question(`${question}${suffix}: `, (answer) => {
@@ -63,7 +71,7 @@ function prompt(rl, question, defaultValue = "") {
   });
 }
 
-function promptSecret(rl, question, currentValue = "") {
+function promptSecret(rl: readline.Interface, question: string, currentValue = ""): Promise<string> {
   const masked = currentValue ? "••••" + currentValue.slice(-4) : "";
   const suffix = masked ? ` [${masked}]` : "";
   return new Promise((resolve) => {
@@ -73,8 +81,8 @@ function promptSecret(rl, question, currentValue = "") {
   });
 }
 
-export async function runConfigure() {
-  const existing = loadConfig() || {};
+export async function runConfigure(): Promise<void> {
+  const existing = loadConfig() || ({} as Partial<AppConfig>);
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -100,7 +108,7 @@ export async function runConfigure() {
 
   rl.close();
 
-  const config = {
+  const config: AppConfig = {
     jiraBaseUrl,
     jiraEmail,
     jiraApiToken,

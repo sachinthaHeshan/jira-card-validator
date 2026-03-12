@@ -5,8 +5,91 @@ dotenv.config();
 
 const { JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN, GITHUB_TOKEN } = process.env;
 
-// GitHub repositories to check
-const REPOS = [
+interface PullRequestData {
+  repo: string;
+  number: number;
+  title: string;
+  branch: string;
+  url: string;
+  author: string;
+  draft: boolean;
+  state: "open" | "closed";
+  merged: boolean;
+  mergedAt?: string | null;
+}
+
+interface GitHubPR {
+  number: number;
+  title: string;
+  head: { ref: string };
+  html_url: string;
+  user: { login: string };
+  draft: boolean;
+  merged_at: string | null;
+}
+
+interface JiraCommentMark {
+  type: string;
+  attrs?: { href?: string };
+}
+
+interface JiraCommentContentItem {
+  text?: string;
+  type?: string;
+  attrs?: { url?: string };
+  marks?: JiraCommentMark[];
+}
+
+interface JiraCommentContentBlock {
+  content?: JiraCommentContentItem[];
+}
+
+interface JiraComment {
+  body?: { content?: JiraCommentContentBlock[] } | string;
+}
+
+interface JiraCard {
+  key: string;
+  fields: {
+    summary: string;
+    status?: { name: string };
+    issuetype?: { name: string };
+    assignee?: { displayName: string } | null;
+    created?: string;
+    updated?: string;
+    comment?: { comments: JiraComment[] };
+  };
+}
+
+interface JiraTransition {
+  id: string;
+  name: string;
+  to: { name: string };
+}
+
+type CardStatus = "unknown" | "no-prs" | "all-merged" | "has-open" | "mixed";
+
+interface ValidationResult {
+  cardKey: string;
+  cardTitle: string;
+  assigneeName: string;
+  cardStatus: CardStatus;
+  statusIcon: string;
+  allRelatedPRs: PullRequestData[];
+  openPRs: PullRequestData[];
+  mergedPRs: PullRequestData[];
+  closedNotMergedPRs: PullRequestData[];
+  notFoundUrls: string[];
+  commentPRs: PullRequestData[];
+  branchPRs: PullRequestData[];
+}
+
+interface UpdateResults {
+  success: ValidationResult[];
+  failed: { card: ValidationResult; error: string }[];
+}
+
+const REPOS: string[] = [
   "ChameleonCollective/CollectiveOSMultiTenant",
   "ChameleonCollective/CollectiveOSMultiTenantExpressBE",
   "ChameleonCollective/MultitenantSignUpService",
@@ -15,14 +98,12 @@ const REPOS = [
   "ChameleonCollective/CollectiveOSMultiTenantSST",
 ];
 
-// Jira auth header
 const jiraAuth =
   "Basic " + Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString("base64");
 
 // ============= GITHUB FUNCTIONS =============
 
-// Fetch PRs from a specific repository
-async function getPullRequests(repo, state = "open", perPage = 100) {
+async function getPullRequests(repo: string, state: "open" | "closed" = "open", perPage = 100): Promise<GitHubPR[]> {
   const apiUrl = `https://api.github.com/repos/${repo}/pulls?state=${state}&per_page=${perPage}&sort=updated&direction=desc`;
 
   try {
@@ -34,33 +115,27 @@ async function getPullRequests(repo, state = "open", perPage = 100) {
     });
 
     if (!res.ok) {
-      console.error(
-        `Failed to fetch PRs for ${repo}: ${res.status} ${res.statusText}`,
-      );
+      console.error(`Failed to fetch PRs for ${repo}: ${res.status} ${res.statusText}`);
       return [];
     }
 
-    const data = await res.json();
-    return data;
+    return (await res.json()) as GitHubPR[];
   } catch (error) {
-    console.error(`Error fetching PRs for ${repo}:`, error.message);
+    console.error(`Error fetching PRs for ${repo}:`, (error as Error).message);
     return [];
   }
 }
 
-// Fetch PRs from a single repo (both open and closed in parallel)
-async function fetchRepoData(repo) {
+async function fetchRepoData(repo: string): Promise<PullRequestData[]> {
   try {
-    // Fetch open and closed PRs in parallel for this repo
     const [openPRs, closedPRs] = await Promise.all([
       getPullRequests(repo, "open", 30),
       getPullRequests(repo, "closed", 30),
     ]);
 
-    const allPRs = [];
+    const allPRs: PullRequestData[] = [];
 
-    // Process open PRs
-    openPRs.forEach((pr) => {
+    for (const pr of openPRs) {
       allPRs.push({
         repo,
         number: pr.number,
@@ -72,10 +147,9 @@ async function fetchRepoData(repo) {
         state: "open",
         merged: false,
       });
-    });
+    }
 
-    // Process closed PRs
-    closedPRs.forEach((pr) => {
+    for (const pr of closedPRs) {
       allPRs.push({
         repo,
         number: pr.number,
@@ -85,27 +159,22 @@ async function fetchRepoData(repo) {
         author: pr.user.login,
         draft: pr.draft,
         state: "closed",
-        merged: pr.merged_at ? true : false,
+        merged: !!pr.merged_at,
         mergedAt: pr.merged_at,
       });
-    });
+    }
 
     return allPRs;
   } catch (error) {
-    console.error(`⚠️  Error fetching from ${repo}:`, error.message);
-    return []; // Return empty array on error, don't fail entire process
+    console.error(`⚠️  Error fetching from ${repo}:`, (error as Error).message);
+    return [];
   }
 }
 
-// Fetch all PRs from all repositories in parallel
-async function getAllPRs() {
+async function getAllPRs(): Promise<PullRequestData[]> {
   console.log("Fetching PRs from all repositories in parallel...\n");
 
-  // Fetch from all repos in parallel
-  const allRepoPromises = REPOS.map((repo) => fetchRepoData(repo));
-  const repoResults = await Promise.all(allRepoPromises);
-
-  // Flatten all PRs into a single array
+  const repoResults = await Promise.all(REPOS.map((repo) => fetchRepoData(repo)));
   const allPRs = repoResults.flat();
 
   const openCount = allPRs.filter((pr) => pr.state === "open").length;
@@ -117,68 +186,53 @@ async function getAllPRs() {
 
 // ============= JIRA FUNCTIONS =============
 
-// Update card status
-async function updateCardStatus(cardKey, newStatus) {
+async function updateCardStatus(cardKey: string, newStatus: string): Promise<boolean> {
   const url = `${JIRA_BASE_URL}/rest/api/3/issue/${cardKey}/transitions`;
 
-  try {
-    // First, get available transitions
-    const getRes = await fetch(url, {
-      headers: {
-        Authorization: jiraAuth,
-        Accept: "application/json",
-      },
-    });
+  const getRes = await fetch(url, {
+    headers: {
+      Authorization: jiraAuth,
+      Accept: "application/json",
+    },
+  });
 
-    if (!getRes.ok) {
-      throw new Error(`Failed to get transitions: ${getRes.status}`);
-    }
-
-    const transitions = await getRes.json();
-
-    // Find the transition ID for the target status
-    const transition = transitions.transitions.find(
-      (t) =>
-        t.name.toUpperCase() === newStatus.toUpperCase() ||
-        t.to.name.toUpperCase() === newStatus.toUpperCase(),
-    );
-
-    if (!transition) {
-      throw new Error(
-        `Transition to "${newStatus}" not found. Available: ${transitions.transitions
-          .map((t) => t.name)
-          .join(", ")}`,
-      );
-    }
-
-    // Execute the transition
-    const postRes = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: jiraAuth,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        transition: {
-          id: transition.id,
-        },
-      }),
-    });
-
-    if (!postRes.ok) {
-      const errorText = await postRes.text();
-      throw new Error(`Failed to update: ${postRes.status} - ${errorText}`);
-    }
-
-    return true;
-  } catch (error) {
-    throw error;
+  if (!getRes.ok) {
+    throw new Error(`Failed to get transitions: ${getRes.status}`);
   }
+
+  const transitions = (await getRes.json()) as { transitions: JiraTransition[] };
+
+  const transition = transitions.transitions.find(
+    (t) =>
+      t.name.toUpperCase() === newStatus.toUpperCase() ||
+      t.to.name.toUpperCase() === newStatus.toUpperCase(),
+  );
+
+  if (!transition) {
+    throw new Error(
+      `Transition to "${newStatus}" not found. Available: ${transitions.transitions.map((t) => t.name).join(", ")}`,
+    );
+  }
+
+  const postRes = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: jiraAuth,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ transition: { id: transition.id } }),
+  });
+
+  if (!postRes.ok) {
+    const errorText = await postRes.text();
+    throw new Error(`Failed to update: ${postRes.status} - ${errorText}`);
+  }
+
+  return true;
 }
 
-// Fetch cards with status 'DEV IN REVIEW'
-async function getDevInReviewCards(showAllUsers = false) {
+async function getDevInReviewCards(showAllUsers = false): Promise<JiraCard[]> {
   const jql = showAllUsers
     ? 'status = "DEV IN REVIEW" ORDER BY created DESC'
     : 'assignee = currentUser() AND status = "DEV IN REVIEW" ORDER BY created DESC';
@@ -194,16 +248,8 @@ async function getDevInReviewCards(showAllUsers = false) {
   const url = `${JIRA_BASE_URL}/rest/api/3/search/jql`;
 
   const requestBody = {
-    jql: jql,
-    fields: [
-      "summary",
-      "status",
-      "issuetype",
-      "assignee",
-      "created",
-      "updated",
-      "comment",
-    ],
+    jql,
+    fields: ["summary", "status", "issuetype", "assignee", "created", "updated", "comment"],
   };
 
   try {
@@ -224,71 +270,57 @@ async function getDevInReviewCards(showAllUsers = false) {
       throw new Error(`Failed to fetch cards: ${res.status}`);
     }
 
-    const data = await res.json();
-    console.log(
-      `✅ Found ${data.issues?.length || 0} cards in 'DEV IN REVIEW' status\n`,
-    );
-
+    const data = (await res.json()) as { issues?: JiraCard[] };
+    console.log(`✅ Found ${data.issues?.length || 0} cards in 'DEV IN REVIEW' status\n`);
     return data.issues || [];
   } catch (error) {
-    console.error("Error fetching cards:", error.message);
+    console.error("Error fetching cards:", (error as Error).message);
     return [];
   }
 }
 
 // ============= VALIDATION FUNCTIONS =============
 
-// Extract PR URLs from card comments
-function extractPRUrlsFromComments(card, debug = false) {
+function extractPRUrlsFromComments(card: JiraCard, debug = false): string[] {
   const comments = card.fields.comment?.comments || [];
-  const prUrls = [];
+  const prUrls: string[] = [];
+  const prUrlPattern = /https?:\/\/github\.com\/[^\/\s]+\/[^\/\s]+\/pull\/\d+/gi;
 
-  // GitHub PR URL patterns - more comprehensive
-  const prUrlPattern =
-    /https?:\/\/github\.com\/[^\/\s]+\/[^\/\s]+\/pull\/\d+/gi;
-
-  comments.forEach((comment) => {
-    // Extract comment body text and URLs from various Jira comment structures
+  for (const comment of comments) {
     let body = "";
-    const foundUrls = [];
+    const foundUrls: string[] = [];
 
-    if (comment.body?.content) {
-      comment.body.content.forEach((contentBlock) => {
-        if (!contentBlock.content) return;
+    if (typeof comment.body === "object" && comment.body?.content) {
+      for (const contentBlock of comment.body.content) {
+        if (!contentBlock.content) continue;
 
-        contentBlock.content.forEach((item) => {
-          // Handle text nodes
+        for (const item of contentBlock.content) {
           if (item.text) {
             body += item.text + " ";
           }
 
-          // Handle inlineCard (embedded URLs)
           if (item.type === "inlineCard" && item.attrs?.url) {
             const url = item.attrs.url;
             if (prUrlPattern.test(url)) {
               foundUrls.push(url);
               if (debug) {
-                console.log(
-                  `[DEBUG] Found inlineCard URL for ${card.key}:`,
-                  url,
-                );
+                console.log(`[DEBUG] Found inlineCard URL for ${card.key}:`, url);
               }
             }
           }
 
-          // Handle marks with hrefs (links)
           if (item.marks) {
-            item.marks.forEach((mark) => {
+            for (const mark of item.marks) {
               if (mark.type === "link" && mark.attrs?.href) {
                 const url = mark.attrs.href;
                 if (prUrlPattern.test(url)) {
                   foundUrls.push(url);
                 }
               }
-            });
+            }
           }
-        });
-      });
+        }
+      }
     } else if (typeof comment.body === "string") {
       body = comment.body;
     }
@@ -296,13 +328,9 @@ function extractPRUrlsFromComments(card, debug = false) {
     const bodyStr = String(body || "").trim();
 
     if (debug && bodyStr) {
-      console.log(
-        `\n[DEBUG] Comment text for ${card.key}:`,
-        bodyStr.substring(0, 200),
-      );
+      console.log(`\n[DEBUG] Comment text for ${card.key}:`, bodyStr.substring(0, 200));
     }
 
-    // Match URLs from text content
     const matches = bodyStr.match(prUrlPattern);
     if (matches) {
       if (debug) {
@@ -311,15 +339,11 @@ function extractPRUrlsFromComments(card, debug = false) {
       foundUrls.push(...matches);
     }
 
-    // Add all found URLs
     prUrls.push(...foundUrls);
-  });
+  }
 
-  // Return unique URLs (normalized to lowercase and https for comparison)
   const uniqueUrls = [
-    ...new Set(
-      prUrls.map((url) => url.toLowerCase().replace(/^http:\/\//, "https://")),
-    ),
+    ...new Set(prUrls.map((url) => url.toLowerCase().replace(/^http:\/\//, "https://"))),
   ];
 
   if (debug && uniqueUrls.length > 0) {
@@ -329,62 +353,47 @@ function extractPRUrlsFromComments(card, debug = false) {
   return uniqueUrls;
 }
 
-// Find PR by URL
-function findPRByUrl(prUrl, allPRs) {
+function findPRByUrl(prUrl: string, allPRs: PullRequestData[]): PullRequestData | undefined {
   const normalizedUrl = prUrl.toLowerCase().replace(/^http:\/\//, "https://");
   return allPRs.find((pr) => pr.url === normalizedUrl);
 }
 
-// Find all PRs that match the card key in branch name
-function findPRsByCardKey(cardKey, allPRs) {
+function findPRsByCardKey(cardKey: string, allPRs: PullRequestData[]): PullRequestData[] {
   return allPRs.filter((pr) => pr.branch.includes(cardKey));
 }
 
-// Validate a single card
-function validateCard(card, allPRs, debug = false) {
+function validateCard(card: JiraCard, allPRs: PullRequestData[], debug = false): ValidationResult {
   const cardKey = card.key;
   const cardTitle = card.fields.summary;
   const assigneeName = card.fields.assignee?.displayName || "Unassigned";
 
-  // Find PRs from comments
   const commentUrls = extractPRUrlsFromComments(card, debug);
   const commentPRs = commentUrls
     .map((url) => findPRByUrl(url, allPRs))
-    .filter((pr) => pr !== undefined);
+    .filter((pr): pr is PullRequestData => pr !== undefined);
 
-  // Find PRs from branch names
   const branchPRs = findPRsByCardKey(cardKey, allPRs);
 
-  // Combine all PRs (remove duplicates by URL)
   const allRelatedPRs = [...commentPRs];
-  branchPRs.forEach((branchPR) => {
+  for (const branchPR of branchPRs) {
     if (!allRelatedPRs.find((pr) => pr.url === branchPR.url)) {
       allRelatedPRs.push(branchPR);
     }
-  });
+  }
 
-  // Check for PRs that were in comments but not found
   const notFoundUrls = commentUrls.filter((url) => !findPRByUrl(url, allPRs));
 
-  // Categorize PRs
   const openPRs = allRelatedPRs.filter((pr) => pr.state === "open");
   const mergedPRs = allRelatedPRs.filter((pr) => pr.merged);
-  const closedNotMergedPRs = allRelatedPRs.filter(
-    (pr) => pr.state === "closed" && !pr.merged,
-  );
+  const closedNotMergedPRs = allRelatedPRs.filter((pr) => pr.state === "closed" && !pr.merged);
 
-  // Determine card status
-  let cardStatus = "unknown";
+  let cardStatus: CardStatus = "unknown";
   let statusIcon = "❓";
 
   if (allRelatedPRs.length === 0 && notFoundUrls.length === 0) {
     cardStatus = "no-prs";
     statusIcon = "❓";
-  } else if (
-    allRelatedPRs.length > 0 &&
-    openPRs.length === 0 &&
-    allRelatedPRs.every((pr) => pr.merged)
-  ) {
+  } else if (allRelatedPRs.length > 0 && openPRs.length === 0 && allRelatedPRs.every((pr) => pr.merged)) {
     cardStatus = "all-merged";
     statusIcon = "🟣";
   } else if (openPRs.length > 0) {
@@ -396,48 +405,31 @@ function validateCard(card, allPRs, debug = false) {
   }
 
   if (debug) {
-    console.log(
-      `[DEBUG] ${cardKey}: Found ${allRelatedPRs.length} PRs (${openPRs.length} open, ${mergedPRs.length} merged)`,
-    );
+    console.log(`[DEBUG] ${cardKey}: Found ${allRelatedPRs.length} PRs (${openPRs.length} open, ${mergedPRs.length} merged)`);
   }
 
   return {
-    cardKey,
-    cardTitle,
-    assigneeName,
-    cardStatus,
-    statusIcon,
-    allRelatedPRs,
-    openPRs,
-    mergedPRs,
-    closedNotMergedPRs,
-    notFoundUrls,
-    commentPRs,
-    branchPRs,
+    cardKey, cardTitle, assigneeName, cardStatus, statusIcon,
+    allRelatedPRs, openPRs, mergedPRs, closedNotMergedPRs, notFoundUrls, commentPRs, branchPRs,
   };
 }
 
 // ============= UPDATE FUNCTIONS =============
 
-async function updateMergedCards(mergedCards) {
+async function updateMergedCards(mergedCards: ValidationResult[]): Promise<UpdateResults> {
   if (mergedCards.length === 0) {
     console.log("\n✨ No cards to update - no fully merged cards found\n");
     return { success: [], failed: [] };
   }
 
-  const targetStatus = "IR-DA"; // Dev in Review -> Dev Approved transition
+  const targetStatus = "IR-DA";
 
   console.log("\n" + "=".repeat(120));
   console.log("🔄 UPDATING CARD STATUS");
   console.log("=".repeat(120));
-  console.log(
-    `\nMoving ${mergedCards.length} card(s) to "${targetStatus}" status...\n`,
-  );
+  console.log(`\nMoving ${mergedCards.length} card(s) to "${targetStatus}" status...\n`);
 
-  const results = {
-    success: [],
-    failed: [],
-  };
+  const results: UpdateResults = { success: [], failed: [] };
 
   for (const card of mergedCards) {
     try {
@@ -446,8 +438,8 @@ async function updateMergedCards(mergedCards) {
       console.log(`  ✅ [${card.cardKey}] → ${targetStatus}`);
       results.success.push(card);
     } catch (error) {
-      console.log(`  ❌ [${card.cardKey}] Failed: ${error.message}`);
-      results.failed.push({ card, error: error.message });
+      console.log(`  ❌ [${card.cardKey}] Failed: ${(error as Error).message}`);
+      results.failed.push({ card, error: (error as Error).message });
     }
   }
 
@@ -459,18 +451,18 @@ async function updateMergedCards(mergedCards) {
 
   if (results.success.length > 0) {
     console.log(`  Successfully moved to ${targetStatus}:`);
-    results.success.forEach((card) => {
+    for (const card of results.success) {
       console.log(`    • [${card.cardKey}] ${card.cardTitle}`);
-    });
+    }
     console.log();
   }
 
   if (results.failed.length > 0) {
     console.log("  Failed updates:");
-    results.failed.forEach(({ card, error }) => {
+    for (const { card, error } of results.failed) {
       console.log(`    • [${card.cardKey}] ${card.cardTitle}`);
       console.log(`      Error: ${error}`);
-    });
+    }
     console.log();
   }
 
@@ -479,13 +471,20 @@ async function updateMergedCards(mergedCards) {
 
 // ============= DISPLAY FUNCTIONS =============
 
-function displayResults(results, debug = false, showAllUsers = false) {
+function padRight(str: string, length: number): string {
+  return str.length >= length ? str.substring(0, length) : str + " ".repeat(length - str.length);
+}
+
+function truncate(str: string, length: number): string {
+  return str.length > length ? str.substring(0, length - 3) + "..." : str;
+}
+
+function displayResults(results: ValidationResult[], debug = false, showAllUsers = false): void {
   console.log("\n" + "=".repeat(120));
   console.log("📊 VALIDATION RESULTS");
   console.log("=".repeat(120));
   console.log();
 
-  // Table header
   const keyWidth = 15;
   const titleWidth = showAllUsers ? 40 : 50;
   const statusWidth = 12;
@@ -501,30 +500,18 @@ function displayResults(results, debug = false, showAllUsers = false) {
   );
   console.log("-".repeat(120));
 
-  // Display all cards
-  results.forEach((result) => {
+  for (const result of results) {
     const key = `[${result.cardKey}]`;
     const title = truncate(result.cardTitle, titleWidth - 1);
-    const assignee = showAllUsers
-      ? truncate(result.assigneeName || "Unassigned", assigneeWidth - 1)
-      : "";
+    const assignee = showAllUsers ? truncate(result.assigneeName || "Unassigned", assigneeWidth - 1) : "";
 
-    // Create emoji visualization
     const openEmojis = "🟢 ".repeat(result.openPRs.length);
     const mergedEmojis = "🟣 ".repeat(result.mergedPRs.length);
-    const closedEmojis =
-      result.closedNotMergedPRs.length > 0
-        ? "❌ ".repeat(result.closedNotMergedPRs.length)
-        : "";
-    const notFoundEmojis =
-      result.notFoundUrls.length > 0
-        ? "❓ ".repeat(result.notFoundUrls.length)
-        : "";
+    const closedEmojis = result.closedNotMergedPRs.length > 0 ? "❌ ".repeat(result.closedNotMergedPRs.length) : "";
+    const notFoundEmojis = result.notFoundUrls.length > 0 ? "❓ ".repeat(result.notFoundUrls.length) : "";
 
     let prStatus = openEmojis + mergedEmojis + closedEmojis + notFoundEmojis;
-    if (prStatus === "") {
-      prStatus = "❓ (no PRs found)";
-    }
+    if (prStatus === "") prStatus = "❓ (no PRs found)";
 
     console.log(
       padRight(result.statusIcon, statusWidth) +
@@ -534,95 +521,63 @@ function displayResults(results, debug = false, showAllUsers = false) {
         prStatus.trim(),
     );
 
-    // Show PR details
     if (result.openPRs.length > 0) {
       console.log(`  └─ 🟢 Open PRs (${result.openPRs.length}):`);
-      result.openPRs.forEach((pr) => {
+      for (const pr of result.openPRs) {
         const inComment = result.commentPRs.includes(pr);
         const inBranch = result.branchPRs.includes(pr);
-        let source = "";
-        if (inComment && inBranch) {
-          source = "(from comment + branch match)";
-        } else if (inComment) {
-          source = "(from comment)";
-        } else {
-          source = "(from branch match)";
-        }
+        const source = inComment && inBranch ? "(from comment + branch match)" : inComment ? "(from comment)" : "(from branch match)";
         console.log(`     • ${pr.url} ${source}`);
-      });
+      }
     }
 
     if (result.mergedPRs.length > 0) {
       console.log(`  └─ 🟣 Merged PRs (${result.mergedPRs.length}):`);
-      result.mergedPRs.forEach((pr) => {
+      for (const pr of result.mergedPRs) {
         const inComment = result.commentPRs.includes(pr);
         const inBranch = result.branchPRs.includes(pr);
-        let source = "";
-        if (inComment && inBranch) {
-          source = "(from comment + branch match)";
-        } else if (inComment) {
-          source = "(from comment)";
-        } else {
-          source = "(from branch match)";
-        }
-        const mergedDate = pr.mergedAt
-          ? new Date(pr.mergedAt).toLocaleDateString()
-          : "";
-        console.log(
-          `     • ${pr.url} ${source} ${
-            mergedDate ? `- merged ${mergedDate}` : ""
-          }`,
-        );
-      });
+        const source = inComment && inBranch ? "(from comment + branch match)" : inComment ? "(from comment)" : "(from branch match)";
+        const mergedDate = pr.mergedAt ? new Date(pr.mergedAt).toLocaleDateString() : "";
+        console.log(`     • ${pr.url} ${source} ${mergedDate ? `- merged ${mergedDate}` : ""}`);
+      }
     }
 
     if (result.closedNotMergedPRs.length > 0) {
-      console.log(
-        `  └─ ❌ Closed (not merged) PRs (${result.closedNotMergedPRs.length}):`,
-      );
-      result.closedNotMergedPRs.forEach((pr) => {
+      console.log(`  └─ ❌ Closed (not merged) PRs (${result.closedNotMergedPRs.length}):`);
+      for (const pr of result.closedNotMergedPRs) {
         console.log(`     • ${pr.url}`);
-      });
+      }
     }
 
     if (result.notFoundUrls.length > 0) {
-      console.log(
-        `  └─ ❓ PRs not found in recent data (${result.notFoundUrls.length}):`,
-      );
-      result.notFoundUrls.forEach((url) => {
+      console.log(`  └─ ❓ PRs not found in recent data (${result.notFoundUrls.length}):`);
+      for (const url of result.notFoundUrls) {
         console.log(`     • ${url}`);
-      });
+      }
     }
 
     if (result.allRelatedPRs.length === 0 && result.notFoundUrls.length === 0) {
-      console.log(
-        `  └─ ❓ No PRs found (no PR links in comments, no matching branch names)`,
-      );
+      console.log(`  └─ ❓ No PRs found (no PR links in comments, no matching branch names)`);
     }
 
     console.log();
-  });
+  }
 
-  // Categorized lists
+  const mergedCards = results.filter((r) => r.cardStatus === "all-merged");
+
   console.log("\n" + "=".repeat(120));
   console.log("🟣 LIST OF FULLY MERGED CARDS");
   console.log("=".repeat(120));
 
-  const mergedCards = results.filter((r) => r.cardStatus === "all-merged");
-
   if (mergedCards.length > 0) {
-    console.log(
-      `\n${mergedCards.length} card(s) with all PRs merged - ready to move to next status:\n`,
-    );
-    mergedCards.forEach((r) => {
+    console.log(`\n${mergedCards.length} card(s) with all PRs merged - ready to move to next status:\n`);
+    for (const r of mergedCards) {
       console.log(`🟣 [${r.cardKey}] ${r.cardTitle}`);
       console.log(`   📋 ${JIRA_BASE_URL}/browse/${r.cardKey}`);
       console.log(`   ✅ All ${r.mergedPRs.length} PR(s) merged`);
-      r.mergedPRs.forEach((pr) => {
-        console.log(`      • ${pr.url}`);
-      });
+      for (const pr of r.mergedPRs) console.log(`      • ${pr.url}`);
       console.log();
-    });
+    }
   } else {
     console.log("\n✨ No cards with all PRs merged\n");
   }
@@ -634,22 +589,17 @@ function displayResults(results, debug = false, showAllUsers = false) {
   const missingPRCards = results.filter((r) => r.cardStatus === "no-prs");
 
   if (missingPRCards.length > 0) {
-    console.log(
-      `\n${missingPRCards.length} card(s) with no PRs found - may need attention:\n`,
-    );
-    missingPRCards.forEach((r) => {
+    console.log(`\n${missingPRCards.length} card(s) with no PRs found - may need attention:\n`);
+    for (const r of missingPRCards) {
       console.log(`❓ [${r.cardKey}] ${r.cardTitle}`);
       console.log(`   📋 ${JIRA_BASE_URL}/browse/${r.cardKey}`);
-      console.log(
-        `   ⚠️  No PR links in comments and no matching branch names found`,
-      );
+      console.log(`   ⚠️  No PR links in comments and no matching branch names found`);
       console.log();
-    });
+    }
   } else {
     console.log("\n✨ All cards have associated PRs\n");
   }
 
-  // Summary
   console.log("\n" + "=".repeat(120));
   console.log("📈 SUMMARY");
   console.log("=".repeat(120));
@@ -664,52 +614,24 @@ function displayResults(results, debug = false, showAllUsers = false) {
   console.log(`  🟢 Cards with open PRs: ${hasOpenPRs}`);
   console.log(`  🟣 Cards with all PRs merged: ${allMergedCards}`);
   console.log(`  ❓ Cards missing PRs: ${missingCards}`);
-  if (mixedCards > 0) {
-    console.log(`  ⚠️  Cards with mixed status: ${mixedCards}`);
-  }
+  if (mixedCards > 0) console.log(`  ⚠️  Cards with mixed status: ${mixedCards}`);
   console.log();
-}
-
-// Helper functions for formatting
-function padRight(str, length) {
-  return str.length >= length
-    ? str.substring(0, length)
-    : str + " ".repeat(length - str.length);
-}
-
-function truncate(str, length) {
-  return str.length > length ? str.substring(0, length - 3) + "..." : str;
 }
 
 // ============= MAIN =============
 
-async function main() {
+async function main(): Promise<void> {
   try {
     const startTime = Date.now();
 
-    // Check for flags
-    const debug =
-      process.argv.includes("--debug") || process.env.DEBUG === "true";
-    const updateMode =
-      process.argv.includes("-u") || process.argv.includes("--update");
-    const showAllUsers =
-      process.argv.includes("-a") || process.argv.includes("--all");
+    const debug = process.argv.includes("--debug") || process.env.DEBUG === "true";
+    const updateMode = process.argv.includes("-u") || process.argv.includes("--update");
+    const showAllUsers = process.argv.includes("-a") || process.argv.includes("--all");
 
-    if (debug) {
-      console.log("🐛 Debug mode enabled\n");
-    }
+    if (debug) console.log("🐛 Debug mode enabled\n");
+    if (updateMode) console.log("🔄 Update mode enabled - will move merged cards to IR-DA status\n");
+    if (showAllUsers) console.log("🌐 All users mode - showing cards for everyone\n");
 
-    if (updateMode) {
-      console.log(
-        "🔄 Update mode enabled - will move merged cards to IR-DA status\n",
-      );
-    }
-
-    if (showAllUsers) {
-      console.log("🌐 All users mode - showing cards for everyone\n");
-    }
-
-    // Validate environment variables
     if (!GITHUB_TOKEN) {
       console.error("❌ Error: GITHUB_TOKEN is not set in .env file");
       return;
@@ -724,7 +646,6 @@ async function main() {
     console.log("=".repeat(120));
     console.log();
 
-    // Fetch GitHub PRs and Jira cards in parallel for maximum speed
     const [allPRs, cards] = await Promise.all([
       getAllPRs(),
       getDevInReviewCards(showAllUsers),
@@ -735,15 +656,10 @@ async function main() {
 
     if (debug) {
       console.log("\n[DEBUG] All PR branches:");
-      allPRs.forEach((pr) => {
-        const status =
-          pr.state === "open"
-            ? "🟢 OPEN"
-            : pr.merged
-              ? "🟣 MERGED"
-              : "❌ CLOSED";
+      for (const pr of allPRs) {
+        const status = pr.state === "open" ? "🟢 OPEN" : pr.merged ? "🟣 MERGED" : "❌ CLOSED";
         console.log(`  • ${status} ${pr.repo}: ${pr.branch} -> ${pr.url}`);
-      });
+      }
       console.log();
     }
 
@@ -752,18 +668,14 @@ async function main() {
       return;
     }
 
-    // Validate each card
     console.log("🔍 Validating cards...\n");
     const results = cards.map((card) => validateCard(card, allPRs, debug));
 
-    // Display results
     displayResults(results, debug, showAllUsers);
 
-    // Update mode: move fully merged cards to IR-DA
-    let updateResults = null;
+    let updateResults: UpdateResults | null = null;
     if (updateMode) {
       const mergedCards = results.filter((r) => r.cardStatus === "all-merged");
-
       if (mergedCards.length > 0) {
         updateResults = await updateMergedCards(mergedCards);
       } else {
@@ -774,31 +686,26 @@ async function main() {
     const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`\n⚡ Total execution time: ${totalTime}s`);
 
-    // Final summary of updated cards
     if (updateResults && updateResults.success.length > 0) {
       console.log("\n" + "=".repeat(120));
       console.log("✅ FINAL: CARDS MOVED TO IR-DA STATUS");
       console.log("=".repeat(120));
       console.log();
-      updateResults.success.forEach((card) => {
+      for (const card of updateResults.success) {
         console.log(`✅ [${card.cardKey}] ${card.cardTitle}`);
         console.log(`   📋 ${JIRA_BASE_URL}/browse/${card.cardKey}`);
         console.log(`   🎯 Status: DEV IN REVIEW → IR-DA`);
         console.log(`   🟣 All ${card.mergedPRs.length} PR(s) merged:`);
-        card.mergedPRs.forEach((pr) => {
-          console.log(`      • ${pr.url}`);
-        });
+        for (const pr of card.mergedPRs) console.log(`      • ${pr.url}`);
         console.log();
-      });
+      }
       console.log("=".repeat(120));
-      console.log(
-        `🎉 Successfully moved ${updateResults.success.length} card(s) to IR-DA status!`,
-      );
+      console.log(`🎉 Successfully moved ${updateResults.success.length} card(s) to IR-DA status!`);
       console.log("=".repeat(120));
       console.log();
     }
   } catch (error) {
-    console.error("❌ Error:", error.message);
+    console.error("❌ Error:", (error as Error).message);
     console.error(error);
   }
 }
