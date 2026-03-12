@@ -7,7 +7,7 @@
     "jira-card-validator": "./dist/bin/cli.js"
   },
   "files": [
-    "dist/",
+    "dist/**/*",
     "README.md"
   ],
   "scripts": {
