@@ -1,0 +1,36 @@
+{
+  "name": "jira-card-validator",
+  "version": "1.0.0",
+  "description": "CLI tool to validate Jira card statuses against GitHub PR states and auto-transition merged cards",
+  "type": "module",
+  "bin": {
+    "jira-card-validator": "./bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node bin/cli.js",
+    "configure": "node bin/cli.js configure"
+  },
+  "keywords": [
+    "jira",
+    "github",
+    "pr",
+    "pull-request",
+    "validator",
+    "cli",
+    "devops"
+  ],
+  "author": "ChameleonCollective",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "pnpm@10.5.2",
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}
