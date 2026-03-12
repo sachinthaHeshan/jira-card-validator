@@ -11,6 +11,7 @@
     "README.md"
   ],
   "scripts": {
+    "prepare": "tsc",
     "build": "tsc",
     "start": "node dist/validateCardStatus.js",
     "dev": "tsx validateCardStatus.ts",

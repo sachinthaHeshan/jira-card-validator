@@ -528,3 +528,7 @@ MigrationBackup/
 .ionide/
 
 # End of https://www.toptal.com/developers/gitignore/api/node,macos,vs
+
+# Override: include project bin/ source files
+!bin/
+!bin/**
