@@ -11,7 +11,7 @@
     "README.md"
   ],
   "scripts": {
-    "prepare": "npx tsc",
+    "prepare": "node ./node_modules/typescript/bin/tsc",
     "build": "tsc",
     "start": "node dist/validateCardStatus.js",
     "dev": "tsx validateCardStatus.ts",
