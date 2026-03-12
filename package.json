@@ -30,7 +30,6 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "packageManager": "pnpm@10.5.2",
   "dependencies": {
     "dotenv": "^16.4.7",
     "node-fetch": "^3.3.2"
